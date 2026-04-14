@@ -1,7 +1,6 @@
+import platform
+import shutil
 import subprocess
-import sys
-from pathlib import Path
-from shutil import which
 
 from fastapi import APIRouter, HTTPException
 
@@ -14,9 +13,9 @@ logger = get_logger()
 
 
 def _pick_folder_windows() -> str:
-    shell = which("powershell") or which("pwsh")
-    if not shell:
-        return ""
+    ps_exe = shutil.which("powershell") or shutil.which("pwsh")
+    if not ps_exe:
+        raise RuntimeError("PowerShell executable was not found.")
 
     ps_script = (
         "Add-Type -AssemblyName System.Windows.Forms;"
@@ -30,64 +29,66 @@ def _pick_folder_windows() -> str:
         "$result = $dialog.ShowDialog($owner);"
         "if ($result -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }"
     )
+
     proc = subprocess.run(
-        [shell, "-STA", "-NoProfile", "-Command", ps_script],
+        [ps_exe, "-STA", "-NoProfile", "-Command", ps_script],
         capture_output=True,
         text=True,
         check=False,
     )
-
-    if proc.returncode not in (0, 1):
-        stderr = (proc.stderr or "").strip()
-        raise RuntimeError(stderr or "Windows folder picker failed.")
-
+    if proc.returncode != 0:
+        stderr = proc.stderr.strip() or "Unknown PowerShell picker error"
+        raise RuntimeError(stderr)
     return proc.stdout.strip()
 
 
 def _pick_folder_macos() -> str:
-    script = [
-        "set selectedFolder to choose folder with prompt \"Select Photo Folder\"",
-        "POSIX path of selectedFolder",
-    ]
-    command = ["osascript"]
-    for line in script:
-        command.extend(["-e", line])
+    script = """
+try
+    tell application \"Finder\"
+        activate
+    end tell
+    set selectedFolder to choose folder with prompt \"Select Photo Folder\"
+    return POSIX path of selectedFolder
+on error number -128
+    return \"\"
+end try
+""".strip()
 
     proc = subprocess.run(
-        command,
+        ["osascript", "-e", script],
         capture_output=True,
         text=True,
         check=False,
     )
 
-    if proc.returncode == 0:
-        return proc.stdout.strip()
+    if proc.returncode != 0:
+        stderr = proc.stderr.strip()
+        if "User canceled" in stderr or "-128" in stderr:
+            return ""
+        raise RuntimeError(stderr or "Unknown macOS picker error")
 
-    stderr = (proc.stderr or "").strip()
-    # User canceled the picker.
-    if "User canceled" in stderr:
-        return ""
-    raise RuntimeError(stderr or "macOS folder picker failed.")
+    return proc.stdout.strip()
 
 
 def _pick_folder_linux() -> str:
-    if which("zenity"):
-        proc = subprocess.run(
-            [
-                "zenity",
-                "--file-selection",
-                "--directory",
-                "--title=Select Photo Folder",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode == 0:
-            return proc.stdout.strip()
-        if proc.returncode == 1:
-            return ""
-    return ""
+    zenity = shutil.which("zenity")
+    if not zenity:
+        raise RuntimeError("zenity is not installed.")
+
+    proc = subprocess.run(
+        [zenity, "--file-selection", "--directory", "--title=Select Photo Folder"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode == 1:
+        # User cancelled.
+        return ""
+    if proc.returncode != 0:
+        stderr = proc.stderr.strip() or "Unknown Linux picker error"
+        raise RuntimeError(stderr)
+    return proc.stdout.strip()
 
 
 def _pick_folder_tkinter() -> str:
@@ -102,35 +103,39 @@ def _pick_folder_tkinter() -> str:
     root.attributes("-topmost", True)
     selected = filedialog.askdirectory(title="Select Photo Folder")
     root.destroy()
-    return selected
-
-
-def _normalize_folder_path(selected: str) -> str:
-    selected = selected.strip()
-    if not selected:
-        return ""
-    return str(Path(selected).expanduser().resolve())
+    return selected.strip()
 
 
 @router.get("/select-folder", response_model=dict)
 def select_folder() -> dict:
     selected = ""
+    picker_error = ""
+    current_os = platform.system().lower()
+
     try:
-        if sys.platform == "darwin":
-            selected = _pick_folder_macos()
-        elif sys.platform.startswith("win"):
+        if current_os == "windows":
             selected = _pick_folder_windows()
+        elif current_os == "darwin":
+            selected = _pick_folder_macos()
         else:
             selected = _pick_folder_linux()
-
-        if not selected:
-            selected = _pick_folder_tkinter()
     except Exception as exc:
-        logger.error("Folder picker failed | error=%s", str(exc))
-        raise HTTPException(status_code=500, detail=f"Failed to open folder picker: {exc}") from exc
+        picker_error = str(exc)
+        logger.warning("Native folder picker failed | os=%s | error=%s", current_os, picker_error)
 
-    selected = _normalize_folder_path(selected)
+    if not selected and (current_os != "darwin" or picker_error):
+        # On macOS, empty result without error usually means user cancelled Finder.
+        selected = _pick_folder_tkinter()
+        if selected:
+            picker_error = ""
+
     if not selected:
+        if picker_error:
+            logger.error("Folder picker failed | os=%s | error=%s", current_os, picker_error)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to open folder picker on {current_os}: {picker_error}",
+            )
         logger.warning("Folder selection cancelled by user")
         raise HTTPException(status_code=400, detail="Folder selection was cancelled.")
 
