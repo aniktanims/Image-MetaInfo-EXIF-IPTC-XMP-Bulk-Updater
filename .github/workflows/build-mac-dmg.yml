@@ -1,0 +1,133 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-mac-dmg:
+    runs-on: macos-latest
+    env:
+      HAS_APPLE_SIGNING: ${{ secrets['APPLE_CERTIFICATE_P12'] != '' && secrets['APPLE_CERTIFICATE_PASSWORD'] != '' && secrets['APPLE_SIGNING_IDENTITY'] != '' && secrets['APPLE_ID'] != '' && secrets['APPLE_APP_SPECIFIC_PASSWORD'] != '' && secrets['APPLE_TEAM_ID'] != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install backend build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pyinstaller
+
+      - name: Build frontend
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+
+      - name: Install ExifTool
+        run: |
+          brew update
+          brew install exiftool
+          which exiftool
+
+      - name: Build packaged launchers
+        run: |
+          EXIFTOOL_BIN="$(which exiftool)"
+          pyinstaller --noconfirm --clean --windowed \
+            --name "TrackTECH Meta Updater" \
+            --add-data "frontend/dist:frontend/dist" \
+            --add-data "$EXIFTOOL_BIN:bin/exiftool" \
+            packaging/mac/start_app.py
+
+          pyinstaller --noconfirm --clean --windowed \
+            --name "TrackTECH Meta Updater Stop" \
+            packaging/mac/stop_app.py
+
+      - name: Prepare DMG payload
+        run: |
+          mkdir -p dist/mac-payload
+          cp -R "dist/TrackTECH Meta Updater.app" "dist/mac-payload/"
+          cp -R "dist/TrackTECH Meta Updater Stop.app" "dist/mac-payload/"
+
+      - name: Import Apple signing certificate
+        if: ${{ env.HAS_APPLE_SIGNING == 'true' }}
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets['APPLE_CERTIFICATE_P12'] }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets['APPLE_CERTIFICATE_PASSWORD'] }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/apple_signing.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Codesign launchers
+        if: ${{ env.HAS_APPLE_SIGNING == 'true' }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets['APPLE_SIGNING_IDENTITY'] }}
+        run: |
+          codesign --force --deep --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "dist/mac-payload/TrackTECH Meta Updater.app"
+          codesign --force --deep --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "dist/mac-payload/TrackTECH Meta Updater Stop.app"
+          codesign --verify --deep --strict --verbose=2 "dist/mac-payload/TrackTECH Meta Updater.app"
+
+      - name: Build DMG
+        run: |
+          hdiutil create \
+            -volname "TrackTECH Meta Updater" \
+            -srcfolder "dist/mac-payload" \
+            -ov \
+            -format UDZO \
+            "dist/TrackTECH-Meta-Updater-mac.dmg"
+
+      - name: Codesign DMG
+        if: ${{ env.HAS_APPLE_SIGNING == 'true' }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets['APPLE_SIGNING_IDENTITY'] }}
+        run: |
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "dist/TrackTECH-Meta-Updater-mac.dmg"
+
+      - name: Notarize and staple DMG
+        if: ${{ env.HAS_APPLE_SIGNING == 'true' }}
+        env:
+          APPLE_ID: ${{ secrets['APPLE_ID'] }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets['APPLE_APP_SPECIFIC_PASSWORD'] }}
+          APPLE_TEAM_ID: ${{ secrets['APPLE_TEAM_ID'] }}
+        run: |
+          xcrun notarytool store-credentials "tracktech-notary" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD"
+          xcrun notarytool submit "dist/TrackTECH-Meta-Updater-mac.dmg" --keychain-profile "tracktech-notary" --wait
+          xcrun stapler staple "dist/TrackTECH-Meta-Updater-mac.dmg"
+
+      - name: Notarization skipped notice
+        if: ${{ env.HAS_APPLE_SIGNING != 'true' }}
+        run: |
+          echo "Apple signing/notarization secrets are missing. Produced an unsigned DMG artifact."
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrackTECH-Meta-Updater-mac-dmg
+          path: dist/TrackTECH-Meta-Updater-mac.dmg

@@ -48,6 +48,42 @@ Optional tasks are also available:
 - `Start Backend Only`
 - `Start Frontend Only`
 
+## macOS client delivery via GitHub Actions (DMG)
+This repo includes a workflow at `.github/workflows/build-mac-dmg.yml`.
+
+How to build a distributable DMG:
+1. Push a tag like `v1.0.0`, or run the workflow manually from Actions (`workflow_dispatch`).
+2. Download artifact: `TrackTECH-Meta-Updater-mac-dmg`.
+3. Send `TrackTECH-Meta-Updater-mac.dmg` to your client.
+
+### Optional: Apple code signing + notarization (recommended for clients)
+Add these GitHub repository secrets before running the workflow:
+
+- `APPLE_CERTIFICATE_P12`: base64-encoded Developer ID Application certificate (`.p12`)
+- `APPLE_CERTIFICATE_PASSWORD`: password for that `.p12`
+- `APPLE_SIGNING_IDENTITY`: exact codesign identity name, e.g. `Developer ID Application: Your Company (TEAMID)`
+- `APPLE_ID`: Apple ID email used for notarization
+- `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password from Apple ID account
+- `APPLE_TEAM_ID`: Apple Developer Team ID
+
+When these secrets exist, the workflow will:
+1. import cert into temporary keychain,
+2. sign app bundles and DMG,
+3. notarize DMG,
+4. staple notarization ticket.
+
+If secrets are missing, workflow still builds an unsigned DMG.
+
+Inside the DMG:
+- `TrackTECH Meta Updater.app` (start app)
+- `TrackTECH Meta Updater Stop.app` (stop app)
+
+Runtime behavior in packaged mac app:
+- Tries preferred port `8000` first.
+- If `8000` is busy, it automatically selects a free port.
+- If an existing app instance is healthy, it reuses it and opens browser.
+- Bundles ExifTool into the package build process.
+
 ## Manual run (separate terminals)
 Backend:
 
