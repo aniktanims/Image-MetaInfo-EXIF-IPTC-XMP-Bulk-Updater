@@ -43,24 +43,29 @@ jobs:
           brew install exiftool
           which exiftool
 
-      - name: Build packaged launchers
+      - name: Build packaged app
         run: |
           EXIFTOOL_BIN="$(which exiftool)"
           pyinstaller --noconfirm --clean --windowed \
             --name "TrackTECH Meta Updater" \
+            --paths "." \
+            --hidden-import backend \
+            --hidden-import backend.app \
+            --hidden-import backend.app.main \
+            --collect-submodules backend \
+            --collect-all fastapi \
+            --collect-all starlette \
+            --collect-all pydantic \
+            --collect-all uvicorn \
+            --add-data "backend:backend" \
             --add-data "frontend/dist:frontend/dist" \
             --add-data "$EXIFTOOL_BIN:bin/exiftool" \
             packaging/mac/start_app.py
-
-          pyinstaller --noconfirm --clean --windowed \
-            --name "TrackTECH Meta Updater Stop" \
-            packaging/mac/stop_app.py
 
       - name: Prepare DMG payload
         run: |
           mkdir -p dist/mac-payload
           cp -R "dist/TrackTECH Meta Updater.app" "dist/mac-payload/"
-          cp -R "dist/TrackTECH Meta Updater Stop.app" "dist/mac-payload/"
 
       - name: Import Apple signing certificate
         if: ${{ env.HAS_APPLE_SIGNING == 'true' }}
@@ -82,13 +87,12 @@ jobs:
           security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-      - name: Codesign launchers
+      - name: Codesign app bundle
         if: ${{ env.HAS_APPLE_SIGNING == 'true' }}
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets['APPLE_SIGNING_IDENTITY'] }}
         run: |
           codesign --force --deep --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "dist/mac-payload/TrackTECH Meta Updater.app"
-          codesign --force --deep --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "dist/mac-payload/TrackTECH Meta Updater Stop.app"
           codesign --verify --deep --strict --verbose=2 "dist/mac-payload/TrackTECH Meta Updater.app"
 
       - name: Build DMG

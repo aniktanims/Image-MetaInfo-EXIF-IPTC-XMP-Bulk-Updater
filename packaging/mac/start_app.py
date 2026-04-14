@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -19,6 +21,70 @@ MAX_PORT_SCAN = 120
 STATE_DIR = Path.home() / ".tracktech_metainfo_updater"
 PID_FILE = STATE_DIR / "app.pid"
 PORT_FILE = STATE_DIR / "app.port"
+APP_TITLE = "TrackTECH Meta Updater"
+
+
+def _escape_applescript(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _run_osascript(script: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _show_dialog(message: str) -> None:
+    title = _escape_applescript(APP_TITLE)
+    body = _escape_applescript(message)
+    _run_osascript(
+        f'display dialog "{body}" with title "{title}" buttons {{"OK"}} default button "OK"'
+    )
+
+
+def _ask_yes_no(message: str, yes_label: str = "Yes", no_label: str = "No") -> bool:
+    title = _escape_applescript(APP_TITLE)
+    body = _escape_applescript(message)
+    yes = _escape_applescript(yes_label)
+    no = _escape_applescript(no_label)
+    result = _run_osascript(
+        (
+            f'display dialog "{body}" with title "{title}" '
+            f'buttons {{"{no}", "{yes}"}} default button "{yes}"'
+        )
+    )
+    return bool(result and f"button returned:{yes_label}" in result)
+
+
+def _choose_action() -> str | None:
+    title = _escape_applescript(APP_TITLE)
+    result = _run_osascript(
+        (
+            'choose from list {"Start", "Stop"} '
+            f'with title "{title}" '
+            'with prompt "Choose what to do:" '
+            'default items {"Start"} '
+            'OK button name "Continue" '
+            'cancel button name "Cancel"'
+        )
+    )
+    if not result or result == "false":
+        return None
+    if "Start" in result:
+        return "start"
+    if "Stop" in result:
+        return "stop"
+    return None
 
 
 def _resource_root() -> Path:
@@ -96,16 +162,83 @@ def _find_free_port(start_port: int) -> int:
     raise RuntimeError("Could not find a free local port.")
 
 
+def _resolve_command(command: str, extra_candidates: list[Path]) -> Path | None:
+    on_path = shutil.which(command)
+    if on_path:
+        return Path(on_path)
+
+    for candidate in extra_candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _ensure_exiftool_available(root: Path) -> None:
+    bundled = _resolve_command(
+        "exiftool",
+        [
+            root / "bin" / "exiftool",
+            root / "bin" / "exiftool.exe",
+            Path("/opt/homebrew/bin/exiftool"),
+            Path("/usr/local/bin/exiftool"),
+        ],
+    )
+    if bundled:
+        os.environ["EXIFTOOL_PATH"] = str(bundled)
+        return
+
+    wants_install = _ask_yes_no(
+        "ExifTool is required but was not found. Install now using Homebrew?",
+        yes_label="Install",
+        no_label="Cancel",
+    )
+    if not wants_install:
+        raise RuntimeError("ExifTool is required. Install it with: brew install exiftool")
+
+    brew_path = _resolve_command(
+        "brew",
+        [
+            Path("/opt/homebrew/bin/brew"),
+            Path("/usr/local/bin/brew"),
+        ],
+    )
+    if not brew_path:
+        raise RuntimeError(
+            "Homebrew was not found. Install Homebrew first, then run: brew install exiftool"
+        )
+
+    result = subprocess.run(
+        [str(brew_path), "install", "exiftool"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout or "Unknown installer error").strip()
+        tail = "\n".join(output.splitlines()[-10:])
+        raise RuntimeError(f"ExifTool install failed:\n{tail}")
+
+    installed = _resolve_command(
+        "exiftool",
+        [Path("/opt/homebrew/bin/exiftool"), Path("/usr/local/bin/exiftool")],
+    )
+    if not installed:
+        raise RuntimeError("ExifTool installed but command was not found. Please reopen the app.")
+
+    os.environ["EXIFTOOL_PATH"] = str(installed)
+
+
 def _configure_runtime_env() -> None:
     root = _resource_root()
+
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
 
     dist_dir = root / "frontend" / "dist"
     if dist_dir.exists() and (dist_dir / "index.html").exists():
         os.environ["FRONTEND_DIST_DIR"] = str(dist_dir)
 
-    bundled_exiftool = root / "bin" / "exiftool"
-    if bundled_exiftool.exists():
-        os.environ["EXIFTOOL_PATH"] = str(bundled_exiftool)
+    _ensure_exiftool_available(root)
 
 
 def _reuse_or_clean_existing_instance() -> bool:
@@ -132,9 +265,31 @@ def _open_browser_when_ready(port: int) -> None:
         time.sleep(0.5)
 
 
-def main() -> None:
+def _stop_instance() -> None:
+    pid = _read_int_file(PID_FILE)
+    if not pid:
+        _cleanup_state()
+        _show_dialog("No running app instance found.")
+        return
+
+    if not _is_pid_alive(pid):
+        _cleanup_state()
+        _show_dialog("Stale app state was cleaned.")
+        return
+
+    _terminate_pid(pid)
+    _cleanup_state()
+    _show_dialog("App stopped.")
+
+
+def _start_instance() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    _configure_runtime_env()
+
+    try:
+        _configure_runtime_env()
+    except RuntimeError as exc:
+        _show_dialog(str(exc))
+        return
 
     if _reuse_or_clean_existing_instance():
         return
@@ -142,7 +297,6 @@ def main() -> None:
     port = PREFERRED_PORT
     if _is_port_in_use(port):
         port = _find_free_port(PREFERRED_PORT + 1)
-        print(f"Preferred port 8000 busy. Using port {port}.")
 
     PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
     PORT_FILE.write_text(str(port), encoding="utf-8")
@@ -150,7 +304,12 @@ def main() -> None:
     ready_thread = threading.Thread(target=_open_browser_when_ready, args=(port,), daemon=True)
     ready_thread.start()
 
-    from backend.app.main import app
+    try:
+        from backend.app.main import app
+    except Exception as exc:
+        _cleanup_state()
+        _show_dialog(f"Failed to load backend services: {exc}")
+        return
 
     config = uvicorn.Config(app, host=HOST, port=port, log_level="info")
     server = uvicorn.Server(config)
@@ -161,6 +320,23 @@ def main() -> None:
         current_pid = _read_int_file(PID_FILE)
         if current_pid == os.getpid():
             _cleanup_state()
+
+
+def main() -> None:
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].strip().lower()
+        if arg in {"start", "--start"}:
+            _start_instance()
+            return
+        if arg in {"stop", "--stop"}:
+            _stop_instance()
+            return
+
+    action = _choose_action()
+    if action == "start":
+        _start_instance()
+    elif action == "stop":
+        _stop_instance()
 
 
 if __name__ == "__main__":

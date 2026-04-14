@@ -75,14 +75,14 @@ When these secrets exist, the workflow will:
 If secrets are missing, workflow still builds an unsigned DMG.
 
 Inside the DMG:
-- `TrackTECH Meta Updater.app` (start app)
-- `TrackTECH Meta Updater Stop.app` (stop app)
+- `TrackTECH Meta Updater.app` (single app with Start/Stop chooser)
 
 Runtime behavior in packaged mac app:
 - Tries preferred port `8000` first.
 - If `8000` is busy, it automatically selects a free port.
 - If an existing app instance is healthy, it reuses it and opens browser.
-- Bundles ExifTool into the package build process.
+- Bundles backend services, frontend build, and ExifTool in one app package.
+- If ExifTool is not available at runtime, app asks permission and attempts Homebrew install.
 
 ## Manual run (separate terminals)
 Backend:
