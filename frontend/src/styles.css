@@ -222,6 +222,13 @@ h3 {
   font-family: "Space Grotesk", sans-serif;
 }
 
+.tool-path {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  word-break: break-all;
+}
+
 @keyframes rise {
   from {
     opacity: 0;

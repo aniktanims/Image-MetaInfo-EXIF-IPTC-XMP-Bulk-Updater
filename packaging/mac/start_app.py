@@ -194,6 +194,34 @@ def _resolve_command(command: str, extra_candidates: list[Path]) -> Path | None:
     return None
 
 
+def _clear_quarantine(path: Path) -> None:
+    xattr_path = shutil.which("xattr")
+    if not xattr_path:
+        return
+
+    subprocess.run(
+        [xattr_path, "-d", "com.apple.quarantine", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _can_run_exiftool(path: Path) -> bool:
+    try:
+        result = subprocess.run(
+            [str(path), "-ver"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=12,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+    return result.returncode == 0
+
+
 def _ensure_executable(path: Path) -> bool:
     if not path.exists():
         return False
@@ -215,6 +243,7 @@ def _stage_bundled_exiftool(source: Path) -> Path:
     staged = BIN_DIR / "exiftool"
     shutil.copy2(source, staged)
     staged.chmod(0o755)
+    _clear_quarantine(staged)
     return staged
 
 
@@ -222,13 +251,28 @@ def _resolve_exiftool_from_candidates(candidates: list[Path]) -> Path | None:
     for candidate in candidates:
         if not candidate.exists():
             continue
-        if _ensure_executable(candidate):
+        if not _ensure_executable(candidate):
+            continue
+
+        _clear_quarantine(candidate)
+        if _can_run_exiftool(candidate):
             return candidate
+
+        _log(f"ExifTool candidate failed self-test: {candidate}")
     return None
 
 
 def _ensure_exiftool_available(root: Path) -> None:
     _log(f"Resolving ExifTool from root: {root}")
+
+    env_path = os.environ.get("EXIFTOOL_PATH")
+    if env_path:
+        resolved_env = _resolve_exiftool_from_candidates([Path(env_path)])
+        if resolved_env:
+            os.environ["EXIFTOOL_PATH"] = str(resolved_env)
+            return
+        _log(f"Configured EXIFTOOL_PATH is not runnable: {env_path}")
+
     bundled_candidates = [
         root / "bin" / "exiftool",
         root / "bin" / "exiftool.exe",
@@ -245,16 +289,27 @@ def _ensure_exiftool_available(root: Path) -> None:
         try:
             staged = _stage_bundled_exiftool(candidate)
         except OSError:
+            _log(f"Failed to stage bundled ExifTool: {candidate}")
             continue
-        if _ensure_executable(staged):
+        if _can_run_exiftool(staged):
             os.environ["EXIFTOOL_PATH"] = str(staged)
             return
+        _log(f"Staged bundled ExifTool failed self-test: {staged}")
 
-    installed = _resolve_command(
-        "exiftool",
-        [Path("/opt/homebrew/bin/exiftool"), Path("/usr/local/bin/exiftool")],
+    installed_candidates: list[Path] = []
+    on_path = shutil.which("exiftool")
+    if on_path:
+        installed_candidates.append(Path(on_path))
+    installed_candidates.extend(
+        [
+            Path("/opt/homebrew/bin/exiftool"),
+            Path("/usr/local/bin/exiftool"),
+            Path("/usr/bin/exiftool"),
+        ]
     )
-    if installed and _ensure_executable(installed):
+
+    installed = _resolve_exiftool_from_candidates(installed_candidates)
+    if installed:
         os.environ["EXIFTOOL_PATH"] = str(installed)
         return
 
@@ -291,12 +346,18 @@ def _ensure_exiftool_available(root: Path) -> None:
 
     installed = _resolve_command(
         "exiftool",
-        [Path("/opt/homebrew/bin/exiftool"), Path("/usr/local/bin/exiftool")],
+        [Path("/opt/homebrew/bin/exiftool"), Path("/usr/local/bin/exiftool"), Path("/usr/bin/exiftool")],
     )
-    if not installed or not _ensure_executable(installed):
+    if not installed:
         raise RuntimeError("ExifTool installed but command was not found. Please reopen the app.")
 
-    os.environ["EXIFTOOL_PATH"] = str(installed)
+    installed_checked = _resolve_exiftool_from_candidates([installed])
+    if not installed_checked:
+        raise RuntimeError(
+            "ExifTool was installed but is not runnable on this Mac. Please reopen the app and allow install prompts."
+        )
+
+    os.environ["EXIFTOOL_PATH"] = str(installed_checked)
 
 
 def _configure_runtime_env() -> None:

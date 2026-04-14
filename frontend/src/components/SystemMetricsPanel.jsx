@@ -17,17 +17,35 @@ function loadState(percent) {
   return "ok";
 }
 
+function trimPath(pathValue) {
+  if (!pathValue) {
+    return "";
+  }
+  if (pathValue.length <= 56) {
+    return pathValue;
+  }
+  return `...${pathValue.slice(pathValue.length - 56)}`;
+}
+
 export default function SystemMetricsPanel({ metrics }) {
   if (!metrics) {
     return null;
   }
 
+  const exiftool = metrics.exiftool || { available: false, path: null, version: null, error: "Unknown" };
+  const exifState = exiftool.available ? "ok" : "critical";
   const cpuState = loadState(metrics.cpu_percent);
   const memoryState = loadState(metrics.memory_percent);
   const diskState = loadState(metrics.disk_percent);
   const overallLoad = Math.max(metrics.cpu_percent, metrics.memory_percent, metrics.disk_percent);
-  const overallState = loadState(overallLoad);
-  const overallLabel = overallState === "critical" ? "Critical" : overallState === "warn" ? "Warning" : "Healthy";
+  const overallState = exiftool.available ? loadState(overallLoad) : "critical";
+  const overallLabel = !exiftool.available
+    ? "ExifTool Missing"
+    : overallState === "critical"
+      ? "Critical"
+      : overallState === "warn"
+        ? "Warning"
+        : "Healthy";
 
   return (
     <section className="panel metrics-panel">
@@ -52,6 +70,18 @@ export default function SystemMetricsPanel({ metrics }) {
           <p className="kpi-label">Disk Use</p>
           <p className="kpi-value">{metrics.disk_percent}%</p>
           <p className="muted">Free {metrics.disk_free_gb} GB</p>
+        </article>
+        <article className={`kpi-card load-card load-${exifState}`}>
+          <p className="kpi-label">ExifTool</p>
+          <p className="kpi-value">{exiftool.available ? "Ready" : "Not Ready"}</p>
+          <p className="muted">
+            {exiftool.available
+              ? `Version ${exiftool.version || "Unknown"}`
+              : exiftool.error || "ExifTool is unavailable"}
+          </p>
+          {exiftool.path ? (
+            <p className="muted tool-path" title={exiftool.path}>{trimPath(exiftool.path)}</p>
+          ) : null}
         </article>
         <article className="kpi-card">
           <p className="kpi-label">App Uptime</p>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from os import getenv
@@ -7,6 +8,8 @@ from pathlib import Path
 
 from ..config import BACKUP_DIR
 from ..models import MetadataPayload
+
+RUNTIME_BIN_DIR = Path.home() / ".tracktech_metainfo_updater" / "bin"
 
 
 def _unique_target(path: Path) -> Path:
@@ -22,22 +25,120 @@ def _unique_target(path: Path) -> Path:
 
 def _resolve_exiftool_executable() -> str:
     env_path = getenv("EXIFTOOL_PATH")
-    if env_path and Path(env_path).exists():
-        return env_path
+    if env_path:
+        env_candidate = Path(env_path)
+        if env_candidate.exists() and _can_run_exiftool(env_candidate):
+            return str(env_candidate)
+        repaired = _repair_exiftool_binary(env_candidate)
+        if repaired:
+            return str(repaired)
 
     on_path = shutil.which("exiftool")
-    if on_path:
+    if on_path and _can_run_exiftool(Path(on_path)):
         return on_path
 
     common_paths = [
         Path.home() / "AppData/Local/Programs/ExifTool/ExifTool.exe",
         Path("C:/Program Files/ExifTool/ExifTool.exe"),
+        Path("/opt/homebrew/bin/exiftool"),
+        Path("/usr/local/bin/exiftool"),
+        Path("/usr/bin/exiftool"),
     ]
     for candidate in common_paths:
-        if candidate.exists():
+        if candidate.exists() and _can_run_exiftool(candidate):
             return str(candidate)
 
+        repaired = _repair_exiftool_binary(candidate)
+        if repaired:
+            return str(repaired)
+
     raise FileNotFoundError("ExifTool executable could not be resolved.")
+
+
+def _read_exiftool_version(path: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            [str(path), "-ver"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    version = (result.stdout or "").strip().splitlines()
+    return version[0].strip() if version else None
+
+
+def _can_run_exiftool(path: Path) -> bool:
+    if not path.exists():
+        return False
+
+    if not os.access(path, os.X_OK):
+        try:
+            path.chmod(path.stat().st_mode | 0o111)
+        except OSError:
+            return False
+
+    return _read_exiftool_version(path) is not None
+
+
+def get_exiftool_status() -> dict:
+    try:
+        executable = _resolve_exiftool_executable()
+    except Exception as exc:
+        return {
+            "available": False,
+            "path": None,
+            "version": None,
+            "error": str(exc),
+        }
+
+    version = _read_exiftool_version(Path(executable))
+    if not version:
+        return {
+            "available": False,
+            "path": executable,
+            "version": None,
+            "error": "ExifTool was found but version check failed.",
+        }
+
+    return {
+        "available": True,
+        "path": executable,
+        "version": version,
+        "error": None,
+    }
+
+
+def _repair_exiftool_binary(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+
+    try:
+        path.chmod(path.stat().st_mode | 0o111)
+    except OSError:
+        pass
+
+    if _can_run_exiftool(path):
+        return path
+
+    try:
+        RUNTIME_BIN_DIR.mkdir(parents=True, exist_ok=True)
+        staged = RUNTIME_BIN_DIR / "exiftool"
+        shutil.copy2(path, staged)
+        staged.chmod(0o755)
+    except OSError:
+        return None
+
+    if _can_run_exiftool(staged):
+        return staged
+
+    return None
 
 
 def _build_exiftool_args(metadata: MetadataPayload) -> list[str]:
@@ -163,7 +264,8 @@ def write_metadata(
         backup_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, backup_dir / source.name)
 
-    exiftool_args = [_resolve_exiftool_executable(), *_build_exiftool_args(metadata), str(target)]
+    exiftool_executable = _resolve_exiftool_executable()
+    exiftool_args = [exiftool_executable, *_build_exiftool_args(metadata), str(target)]
 
     try:
         result = subprocess.run(
@@ -177,9 +279,19 @@ def write_metadata(
             "ExifTool is not installed or not on PATH. Install ExifTool and retry."
         ) from exc
     except PermissionError as exc:
-        raise RuntimeError(
-            "ExifTool exists but is not executable. On macOS, copy the app to Applications and reopen it."
-        ) from exc
+        repaired = _repair_exiftool_binary(Path(exiftool_executable))
+        if repaired:
+            exiftool_args[0] = str(repaired)
+            result = subprocess.run(
+                exiftool_args,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        else:
+            raise RuntimeError(
+                "ExifTool exists but is not executable. Please allow install when prompted, then reopen the app."
+            ) from exc
     if result.returncode != 0:
         stderr = result.stderr.strip() or "Unknown exiftool error"
         raise RuntimeError(stderr)

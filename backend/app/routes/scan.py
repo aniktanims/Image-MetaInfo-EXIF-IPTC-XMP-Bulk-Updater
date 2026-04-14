@@ -45,9 +45,6 @@ def _pick_folder_windows() -> str:
 def _pick_folder_macos() -> str:
     script = """
 try
-    tell application \"Finder\"
-        activate
-    end tell
     set selectedFolder to choose folder with prompt \"Select Photo Folder\"
     return POSIX path of selectedFolder
 on error number -128

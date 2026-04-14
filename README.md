@@ -84,8 +84,11 @@ Runtime behavior in packaged mac app:
 - If an existing app instance is healthy, it reuses it and opens browser.
 - Bundles backend services, frontend build, and ExifTool in one app package.
 - If ExifTool is not available at runtime, app asks permission and attempts Homebrew install.
-- If bundled ExifTool cannot execute from mounted DMG, app stages it into a writable user runtime folder automatically.
+- App now self-tests ExifTool at startup and only uses runnable binaries.
+- If bundled ExifTool is blocked/unusable, app stages a private runnable copy in `~/.tracktech_metainfo_updater/bin` and retries automatically.
 - Launcher diagnostics are written to `~/.tracktech_metainfo_updater/launcher.log` for troubleshooting unexpected closes.
+- Dashboard now shows ExifTool status (ready/not ready), version, and active executable path in Live System Metrics.
+- Folder picker now has a manual path input fallback, so scanning still works if macOS blocks native picker permissions.
 
 ## Manual run (separate terminals)
 Backend:

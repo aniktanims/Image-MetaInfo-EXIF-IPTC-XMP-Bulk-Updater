@@ -377,6 +377,7 @@ export default function App() {
       <FolderPicker
         folderPath={folderPath}
         onPickFolder={handlePickFolder}
+        onFolderPathChange={(value) => setFolderPath(value)}
         onScan={handleScan}
         loading={scanLoading}
         pickingFolder={folderPicking}

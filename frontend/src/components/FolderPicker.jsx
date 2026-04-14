@@ -3,6 +3,7 @@ import { FiFolder, FiFolderPlus, FiSearch } from "react-icons/fi";
 export default function FolderPicker({
   folderPath,
   onPickFolder,
+  onFolderPathChange,
   onScan,
   loading,
   pickingFolder,
@@ -20,6 +21,14 @@ export default function FolderPicker({
           <FiSearch />
           {loading ? "Scanning..." : "Scan Folder"}
         </button>
+      </div>
+      <div className="row" style={{ marginTop: "10px" }}>
+        <input
+          type="text"
+          placeholder="Paste folder path (example: /Users/you/Pictures)"
+          value={folderPath}
+          onChange={(event) => onFolderPathChange(event.target.value)}
+        />
       </div>
       <div className="folder-chip">{folderPath || "No folder selected"}</div>
     </section>
