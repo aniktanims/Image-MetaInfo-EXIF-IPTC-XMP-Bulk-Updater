@@ -1,0 +1,13 @@
+{
+  "name": "tracktech-metainfo-updater",
+  "private": true,
+  "scripts": {
+    "start": "npm run dev",
+    "dev": "concurrently -k -n backend,frontend -c cyan,magenta \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "backend\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --app-dir backend --reload --host 127.0.0.1 --port 8000 || backend/.venv/bin/python -m uvicorn app.main:app --app-dir backend --reload --host 127.0.0.1 --port 8000 || python -m uvicorn app.main:app --app-dir backend --reload --host 127.0.0.1 --port 8000 || python3 -m uvicorn app.main:app --app-dir backend --reload --host 127.0.0.1 --port 8000",
+    "dev:frontend": "npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
