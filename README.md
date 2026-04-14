@@ -55,6 +55,7 @@ How to build a distributable DMG:
 1. Push a tag like `v1.0.0`, or run the workflow manually from Actions (`workflow_dispatch`).
 2. Download artifact: `TrackTECH-Meta-Updater-mac-dmg`.
 3. Send `TrackTECH-Meta-Updater-mac.dmg` to your client.
+4. On macOS client, drag `TrackTECH Meta Updater.app` into Applications before first launch.
 
 ### Optional: Apple code signing + notarization (recommended for clients)
 Add these GitHub repository secrets before running the workflow:
@@ -84,6 +85,7 @@ Runtime behavior in packaged mac app:
 - Bundles backend services, frontend build, and ExifTool in one app package.
 - If ExifTool is not available at runtime, app asks permission and attempts Homebrew install.
 - If bundled ExifTool cannot execute from mounted DMG, app stages it into a writable user runtime folder automatically.
+- Launcher diagnostics are written to `~/.tracktech_metainfo_updater/launcher.log` for troubleshooting unexpected closes.
 
 ## Manual run (separate terminals)
 Backend:

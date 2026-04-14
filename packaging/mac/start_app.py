@@ -8,9 +8,11 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 import uvicorn
@@ -22,7 +24,18 @@ STATE_DIR = Path.home() / ".tracktech_metainfo_updater"
 PID_FILE = STATE_DIR / "app.pid"
 PORT_FILE = STATE_DIR / "app.port"
 BIN_DIR = STATE_DIR / "bin"
+LAUNCHER_LOG_FILE = STATE_DIR / "launcher.log"
 APP_TITLE = "TrackTECH Meta Updater"
+
+
+def _log(message: str) -> None:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.utcnow().isoformat(timespec="seconds")
+        with LAUNCHER_LOG_FILE.open("a", encoding="utf-8") as log_file:
+            log_file.write(f"{timestamp}Z | {message}\n")
+    except OSError:
+        pass
 
 
 def _escape_applescript(value: str) -> str:
@@ -37,10 +50,13 @@ def _run_osascript(script: str) -> str | None:
             text=True,
             check=False,
         )
-    except OSError:
+    except OSError as exc:
+        _log(f"osascript invocation failed: {exc}")
         return None
 
     if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        _log(f"osascript returned {result.returncode}: {stderr}")
         return None
     return result.stdout.strip()
 
@@ -48,9 +64,11 @@ def _run_osascript(script: str) -> str | None:
 def _show_dialog(message: str) -> None:
     title = _escape_applescript(APP_TITLE)
     body = _escape_applescript(message)
-    _run_osascript(
+    dialog_result = _run_osascript(
         f'display dialog "{body}" with title "{title}" buttons {{"OK"}} default button "OK"'
     )
+    if dialog_result is None:
+        _log(f"Dialog fallback (no UI): {message}")
 
 
 def _ask_yes_no(message: str, yes_label: str = "Yes", no_label: str = "No") -> bool:
@@ -67,7 +85,7 @@ def _ask_yes_no(message: str, yes_label: str = "Yes", no_label: str = "No") -> b
     return bool(result and f"button returned:{yes_label}" in result)
 
 
-def _choose_action() -> str | None:
+def _choose_action() -> str:
     title = _escape_applescript(APP_TITLE)
     result = _run_osascript(
         (
@@ -79,13 +97,15 @@ def _choose_action() -> str | None:
             'cancel button name "Cancel"'
         )
     )
-    if not result or result == "false":
-        return None
+    if result == "false":
+        return "cancel"
+    if not result:
+        return "error"
     if "Start" in result:
         return "start"
     if "Stop" in result:
         return "stop"
-    return None
+    return "error"
 
 
 def _resource_root() -> Path:
@@ -208,6 +228,7 @@ def _resolve_exiftool_from_candidates(candidates: list[Path]) -> Path | None:
 
 
 def _ensure_exiftool_available(root: Path) -> None:
+    _log(f"Resolving ExifTool from root: {root}")
     bundled_candidates = [
         root / "bin" / "exiftool",
         root / "bin" / "exiftool.exe",
@@ -280,6 +301,7 @@ def _ensure_exiftool_available(root: Path) -> None:
 
 def _configure_runtime_env() -> None:
     root = _resource_root()
+    _log(f"Resource root: {root}")
 
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
@@ -334,19 +356,23 @@ def _stop_instance() -> None:
 
 def _start_instance() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _log("App start requested")
 
     try:
         _configure_runtime_env()
     except RuntimeError as exc:
+        _log(f"Runtime configuration failed: {exc}")
         _show_dialog(str(exc))
         return
 
     if _reuse_or_clean_existing_instance():
+        _log("Reused existing healthy instance")
         return
 
     port = PREFERRED_PORT
     if _is_port_in_use(port):
         port = _find_free_port(PREFERRED_PORT + 1)
+    _log(f"Starting backend on port {port}")
 
     PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
     PORT_FILE.write_text(str(port), encoding="utf-8")
@@ -357,6 +383,7 @@ def _start_instance() -> None:
     try:
         from backend.app.main import app
     except Exception as exc:
+        _log(f"Backend import failed: {exc}")
         _cleanup_state()
         _show_dialog(f"Failed to load backend services: {exc}")
         return
@@ -366,13 +393,21 @@ def _start_instance() -> None:
 
     try:
         server.run()
+    except Exception:
+        error_trace = traceback.format_exc()
+        _log(f"Uvicorn crashed:\n{error_trace}")
+        _show_dialog(
+            "App stopped unexpectedly. Check ~/.tracktech_metainfo_updater/launcher.log for details."
+        )
     finally:
         current_pid = _read_int_file(PID_FILE)
         if current_pid == os.getpid():
             _cleanup_state()
+        _log("App process finished")
 
 
 def main() -> None:
+    _log("Launcher opened")
     if len(sys.argv) > 1:
         arg = sys.argv[1].strip().lower()
         if arg in {"start", "--start"}:
@@ -387,7 +422,19 @@ def main() -> None:
         _start_instance()
     elif action == "stop":
         _stop_instance()
+    elif action == "error":
+        _log("Action chooser unavailable; defaulting to start")
+        _start_instance()
+    else:
+        _log("Launcher action canceled by user")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        error_trace = traceback.format_exc()
+        _log(f"Fatal launcher error:\n{error_trace}")
+        _show_dialog(
+            "Launcher crashed. Check ~/.tracktech_metainfo_updater/launcher.log for details."
+        )
