@@ -176,6 +176,10 @@ def write_metadata(
         raise RuntimeError(
             "ExifTool is not installed or not on PATH. Install ExifTool and retry."
         ) from exc
+    except PermissionError as exc:
+        raise RuntimeError(
+            "ExifTool exists but is not executable. On macOS, copy the app to Applications and reopen it."
+        ) from exc
     if result.returncode != 0:
         stderr = result.stderr.strip() or "Unknown exiftool error"
         raise RuntimeError(stderr)

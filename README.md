@@ -83,6 +83,7 @@ Runtime behavior in packaged mac app:
 - If an existing app instance is healthy, it reuses it and opens browser.
 - Bundles backend services, frontend build, and ExifTool in one app package.
 - If ExifTool is not available at runtime, app asks permission and attempts Homebrew install.
+- If bundled ExifTool cannot execute from mounted DMG, app stages it into a writable user runtime folder automatically.
 
 ## Manual run (separate terminals)
 Backend:

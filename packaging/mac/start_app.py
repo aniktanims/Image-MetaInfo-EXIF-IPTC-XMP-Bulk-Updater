@@ -21,6 +21,7 @@ MAX_PORT_SCAN = 120
 STATE_DIR = Path.home() / ".tracktech_metainfo_updater"
 PID_FILE = STATE_DIR / "app.pid"
 PORT_FILE = STATE_DIR / "app.port"
+BIN_DIR = STATE_DIR / "bin"
 APP_TITLE = "TrackTECH Meta Updater"
 
 
@@ -173,18 +174,67 @@ def _resolve_command(command: str, extra_candidates: list[Path]) -> Path | None:
     return None
 
 
+def _ensure_executable(path: Path) -> bool:
+    if not path.exists():
+        return False
+
+    if os.access(path, os.X_OK):
+        return True
+
+    try:
+        mode = path.stat().st_mode
+        path.chmod(mode | 0o111)
+    except OSError:
+        return False
+
+    return os.access(path, os.X_OK)
+
+
+def _stage_bundled_exiftool(source: Path) -> Path:
+    BIN_DIR.mkdir(parents=True, exist_ok=True)
+    staged = BIN_DIR / "exiftool"
+    shutil.copy2(source, staged)
+    staged.chmod(0o755)
+    return staged
+
+
+def _resolve_exiftool_from_candidates(candidates: list[Path]) -> Path | None:
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        if _ensure_executable(candidate):
+            return candidate
+    return None
+
+
 def _ensure_exiftool_available(root: Path) -> None:
-    bundled = _resolve_command(
-        "exiftool",
-        [
-            root / "bin" / "exiftool",
-            root / "bin" / "exiftool.exe",
-            Path("/opt/homebrew/bin/exiftool"),
-            Path("/usr/local/bin/exiftool"),
-        ],
-    )
+    bundled_candidates = [
+        root / "bin" / "exiftool",
+        root / "bin" / "exiftool.exe",
+    ]
+    bundled = _resolve_exiftool_from_candidates(bundled_candidates)
     if bundled:
         os.environ["EXIFTOOL_PATH"] = str(bundled)
+        return
+
+    # DMG-mounted app bundles may expose bundled exiftool without exec permission.
+    for candidate in bundled_candidates:
+        if not candidate.exists():
+            continue
+        try:
+            staged = _stage_bundled_exiftool(candidate)
+        except OSError:
+            continue
+        if _ensure_executable(staged):
+            os.environ["EXIFTOOL_PATH"] = str(staged)
+            return
+
+    installed = _resolve_command(
+        "exiftool",
+        [Path("/opt/homebrew/bin/exiftool"), Path("/usr/local/bin/exiftool")],
+    )
+    if installed and _ensure_executable(installed):
+        os.environ["EXIFTOOL_PATH"] = str(installed)
         return
 
     wants_install = _ask_yes_no(
@@ -222,7 +272,7 @@ def _ensure_exiftool_available(root: Path) -> None:
         "exiftool",
         [Path("/opt/homebrew/bin/exiftool"), Path("/usr/local/bin/exiftool")],
     )
-    if not installed:
+    if not installed or not _ensure_executable(installed):
         raise RuntimeError("ExifTool installed but command was not found. Please reopen the app.")
 
     os.environ["EXIFTOOL_PATH"] = str(installed)

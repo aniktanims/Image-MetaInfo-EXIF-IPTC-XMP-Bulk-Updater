@@ -65,6 +65,7 @@ jobs:
       - name: Prepare DMG payload
         run: |
           mkdir -p dist/mac-payload
+          chmod +x "dist/TrackTECH Meta Updater.app/Contents/Frameworks/bin/exiftool" || true
           cp -R "dist/TrackTECH Meta Updater.app" "dist/mac-payload/"
 
       - name: Import Apple signing certificate
