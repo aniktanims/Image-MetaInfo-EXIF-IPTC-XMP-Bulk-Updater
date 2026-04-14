@@ -7,3 +7,5 @@ frontend/dist/
 node_modules/
 *.zip
 *.rar
+.artifacts/
+*.dmg
