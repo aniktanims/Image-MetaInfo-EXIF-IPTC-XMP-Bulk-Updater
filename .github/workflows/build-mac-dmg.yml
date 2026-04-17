@@ -45,23 +45,7 @@ jobs:
 
       - name: Build macOS app icon
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          import pillow_avif  # noqa: F401
-          from PIL import Image
-
-          source = Path("frontend/tracktech-logo-nav-tall.avif")
-          output = Path("dist/app-icon-source.png")
-          output.parent.mkdir(parents=True, exist_ok=True)
-
-          image = Image.open(source).convert("RGBA")
-          square_size = max(image.size)
-          canvas = Image.new("RGBA", (square_size, square_size), (0, 0, 0, 0))
-          offset = ((square_size - image.width) // 2, (square_size - image.height) // 2)
-          canvas.paste(image, offset)
-          canvas.resize((1024, 1024), Image.Resampling.LANCZOS).save(output)
-          PY
+          python packaging/mac/generate_app_icon.py
 
           ICONSET_DIR="dist/AppIcon.iconset"
           mkdir -p "$ICONSET_DIR"
