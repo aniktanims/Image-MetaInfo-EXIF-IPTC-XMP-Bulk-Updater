@@ -55,6 +55,9 @@ class JobCreateRequest(BaseModel):
     metadata: MetadataPayload
     write_mode: Literal["overwrite", "output_folder"]
     output_folder: str | None = None
+    filename_prefix: str | None = None
+    filename_start_index: int = Field(default=1, ge=1)
+    filename_number_position: Literal["suffix", "prefix"] = "suffix"
 
 
 class JobSummary(BaseModel):

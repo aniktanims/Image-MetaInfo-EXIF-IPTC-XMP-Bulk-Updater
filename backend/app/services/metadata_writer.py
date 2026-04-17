@@ -10,6 +10,7 @@ from ..config import BACKUP_DIR
 from ..models import MetadataPayload
 
 RUNTIME_BIN_DIR = Path.home() / ".tracktech_metainfo_updater" / "bin"
+INVALID_FILENAME_CHARS = '<>:"/\\|?*\n\r\t'
 
 
 def _unique_target(path: Path) -> Path:
@@ -21,6 +22,29 @@ def _unique_target(path: Path) -> Path:
         if not candidate.exists():
             return candidate
         counter += 1
+
+
+def _sanitize_filename_stem(stem: str) -> str:
+    translated = "".join("_" if ch in INVALID_FILENAME_CHARS else ch for ch in stem)
+    compact = " ".join(translated.strip().strip(".").split())
+    if not compact:
+        return "renamed-file"
+    return compact[:180]
+
+
+def _build_renamed_candidate(
+    source: Path,
+    prefix: str,
+    rename_index: int | None,
+    base_dir: Path,
+    number_position: str,
+) -> Path:
+    safe_prefix = _sanitize_filename_stem(prefix)
+    sequence = rename_index if rename_index and rename_index > 0 else 1
+    extension = source.suffix
+    if number_position == "prefix":
+        return base_dir / f"{sequence} - {safe_prefix}{extension}"
+    return base_dir / f"{safe_prefix} - {sequence}{extension}"
 
 
 def _resolve_exiftool_executable() -> str:
@@ -246,23 +270,48 @@ def write_metadata(
     metadata: MetadataPayload,
     write_mode: str,
     output_folder: str | None,
+    filename_prefix: str | None = None,
+    rename_index: int | None = None,
+    filename_number_position: str = "suffix",
 ) -> tuple[str, str | None]:
     source = Path(file_path)
     if not source.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
 
+    should_rename = bool(filename_prefix and filename_prefix.strip())
+    number_position = "prefix" if filename_number_position == "prefix" else "suffix"
     target = source
+    rename_target_after_write: Path | None = None
     if write_mode == "output_folder":
         if not output_folder:
             raise ValueError("Output folder is required for output_folder mode.")
         out_dir = Path(output_folder)
         out_dir.mkdir(parents=True, exist_ok=True)
-        target = _unique_target(out_dir / source.name)
+        if should_rename:
+            rename_candidate = _build_renamed_candidate(
+                source,
+                filename_prefix or "",
+                rename_index,
+                out_dir,
+                number_position,
+            )
+            target = _unique_target(rename_candidate)
+        else:
+            target = _unique_target(out_dir / source.name)
         shutil.copy2(source, target)
     else:
         backup_dir = BACKUP_DIR / source.parent.name
         backup_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, backup_dir / source.name)
+
+        if should_rename:
+            rename_target_after_write = _build_renamed_candidate(
+                source,
+                filename_prefix or "",
+                rename_index,
+                source.parent,
+                number_position,
+            )
 
     exiftool_executable = _resolve_exiftool_executable()
     exiftool_args = [exiftool_executable, *_build_exiftool_args(metadata), str(target)]
@@ -295,5 +344,11 @@ def write_metadata(
     if result.returncode != 0:
         stderr = result.stderr.strip() or "Unknown exiftool error"
         raise RuntimeError(stderr)
+
+    if rename_target_after_write is not None:
+        final_target = _unique_target(rename_target_after_write)
+        if final_target != target:
+            target.rename(final_target)
+            target = final_target
 
     return str(target), None

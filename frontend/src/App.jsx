@@ -76,6 +76,9 @@ export default function App() {
   const [metadata, setMetadata] = useState(initialMetadata);
   const [writeMode, setWriteMode] = useState("overwrite");
   const [outputFolder, setOutputFolder] = useState("");
+  const [filenamePrefix, setFilenamePrefix] = useState("");
+  const [filenameStartIndex, setFilenameStartIndex] = useState(1);
+  const [filenameNumberPosition, setFilenameNumberPosition] = useState("suffix");
 
   const [jobId, setJobId] = useState("");
   const [job, setJob] = useState(null);
@@ -172,11 +175,19 @@ export default function App() {
   async function handleStartJob() {
     setError("");
     try {
+      const normalizedPrefix = filenamePrefix.trim();
+      const normalizedStartIndex = Number.isFinite(Number(filenameStartIndex))
+        ? Math.max(1, Number(filenameStartIndex))
+        : 1;
+
       const payload = {
         files: scanData.all_files,
         metadata,
         write_mode: writeMode,
         output_folder: writeMode === "output_folder" ? outputFolder : null,
+        filename_prefix: normalizedPrefix || null,
+        filename_start_index: normalizedStartIndex,
+        filename_number_position: filenameNumberPosition === "prefix" ? "prefix" : "suffix",
       };
       const response = await createJob(payload);
       setJobId(response.job_id);
@@ -402,6 +413,12 @@ export default function App() {
             onChange={setMetadata}
             writeMode={writeMode}
             onWriteModeChange={setWriteMode}
+            renamePrefix={filenamePrefix}
+            onRenamePrefixChange={setFilenamePrefix}
+            renameStartIndex={filenameStartIndex}
+            onRenameStartIndexChange={setFilenameStartIndex}
+            renameNumberPosition={filenameNumberPosition}
+            onRenameNumberPositionChange={setFilenameNumberPosition}
             canStart={canStart}
             onStartProcessing={handleStartJob}
           />

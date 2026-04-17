@@ -260,6 +260,7 @@ input[type="number"],
 input[type="email"],
 input[type="url"],
 input[type="datetime-local"],
+select,
 textarea {
   width: 100%;
   padding: 11px 12px;
@@ -271,6 +272,7 @@ textarea {
 }
 
 input:focus,
+select:focus,
 textarea:focus {
   outline: none;
   border-color: #40d7ff;
@@ -371,6 +373,17 @@ button:disabled {
   cursor: pointer;
   font-weight: 600;
   margin-bottom: 8px;
+}
+
+.rename-preview-box {
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+.rename-preview-box p {
+  margin: 6px 0;
 }
 
 .preview-panel {

@@ -92,10 +92,27 @@ function customFieldsToCsv(obj) {
     .join("\n");
 }
 
-export default function MetadataForm({ value, onChange, writeMode, onWriteModeChange, canStart, onStartProcessing }) {
+export default function MetadataForm({
+  value,
+  onChange,
+  writeMode,
+  onWriteModeChange,
+  renamePrefix,
+  onRenamePrefixChange,
+  renameStartIndex,
+  onRenameStartIndexChange,
+  renameNumberPosition,
+  onRenameNumberPositionChange,
+  canStart,
+  onStartProcessing,
+}) {
   const [mapLink, setMapLink] = useState("");
   const [customFieldText, setCustomFieldText] = useState(customFieldsToCsv(value.custom_fields));
   const [activeTab, setActiveTab] = useState("core");
+  const previewStart = Number.isFinite(Number(renameStartIndex)) ? Math.max(1, Number(renameStartIndex)) : 1;
+  const previewPrefix = (renamePrefix || "TrackTech x 450 x 450").trim() || "TrackTech x 450 x 450";
+  const position = renameNumberPosition === "prefix" ? "prefix" : "suffix";
+  const previewLine = (n) => (position === "prefix" ? `${n} - ${previewPrefix}` : `${previewPrefix} - ${n}`);
 
   const update = (field) => (event) => {
     onChange({ ...value, [field]: event.target.value });
@@ -130,6 +147,7 @@ export default function MetadataForm({ value, onChange, writeMode, onWriteModeCh
         <button type="button" className={activeTab === "text" ? "tab-btn active" : "tab-btn"} onClick={() => setActiveTab("text")}>Text</button>
         <button type="button" className={activeTab === "location" ? "tab-btn active" : "tab-btn"} onClick={() => setActiveTab("location")}>Location</button>
         <button type="button" className={activeTab === "contact" ? "tab-btn active" : "tab-btn"} onClick={() => setActiveTab("contact")}>Contact</button>
+        <button type="button" className={activeTab === "rename" ? "tab-btn active" : "tab-btn"} onClick={() => setActiveTab("rename")}>Rename</button>
         <button type="button" className={activeTab === "advanced" ? "tab-btn active" : "tab-btn"} onClick={() => setActiveTab("advanced")}>Advanced</button>
       </div>
 
@@ -269,6 +287,56 @@ export default function MetadataForm({ value, onChange, writeMode, onWriteModeCh
           Software
           <input type="text" value={value.software ?? ""} onChange={update("software")} />
         </label>
+      </div>
+      </> : null}
+
+      {activeTab === "rename" ? <>
+      <h3 className="meta-subhead">Filename Rename</h3>
+      <div className="grid">
+        <label className="wide-field">
+          Filename Prefix
+          <input
+            type="text"
+            placeholder="TrackTech x 450 x 450"
+            value={renamePrefix}
+            onChange={(event) => onRenamePrefixChange(event.target.value)}
+          />
+        </label>
+        <label>
+          Start Number
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={renameStartIndex}
+            onChange={(event) => {
+              const raw = event.target.value.trim();
+              if (!raw) {
+                onRenameStartIndexChange(1);
+                return;
+              }
+              const parsed = Number(raw);
+              onRenameStartIndexChange(Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1);
+            }}
+          />
+        </label>
+        <label>
+          Number Position
+          <select
+            value={position}
+            onChange={(event) => onRenameNumberPositionChange(event.target.value === "prefix" ? "prefix" : "suffix")}
+          >
+            <option value="suffix">Suffix (ABC x 457 - 1)</option>
+            <option value="prefix">Prefix (1 - ABC x 457)</option>
+          </select>
+        </label>
+        <div className="rename-preview-box wide-field">
+          <p className="preview-label">Pattern Preview</p>
+          <p>{previewLine(previewStart)}</p>
+          <p>{previewLine(previewStart + 1)}</p>
+          <p>{previewLine(previewStart + 2)}</p>
+          <p className="muted">File extensions stay unchanged (for example .jpeg, .png).</p>
+        </div>
       </div>
       </> : null}
 

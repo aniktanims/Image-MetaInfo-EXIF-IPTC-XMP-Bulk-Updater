@@ -22,6 +22,13 @@ class JobRunner:
         self._retry_attempts = 2
 
     async def create_job(self, payload: JobCreateRequest) -> str:
+        if payload.filename_prefix is not None:
+            normalized_prefix = payload.filename_prefix.strip()
+            payload.filename_prefix = normalized_prefix or None
+
+        if payload.filename_number_position not in {"suffix", "prefix"}:
+            payload.filename_number_position = "suffix"
+
         unresolved = self._load_unresolved_failures()
         unresolved_existing = [path for path in unresolved if Path(path).exists()]
         if unresolved_existing:
@@ -57,11 +64,14 @@ class JobRunner:
 
         asyncio.create_task(self._run_job(job_id, payload))
         self._logger.info(
-            "Job created | job_id=%s | files=%s | write_mode=%s | output_folder=%s",
+            "Job created | job_id=%s | files=%s | write_mode=%s | output_folder=%s | filename_prefix=%s | start_index=%s | number_position=%s",
             job_id,
             len(payload.files),
             payload.write_mode,
             payload.output_folder,
+            payload.filename_prefix,
+            payload.filename_start_index,
+            payload.filename_number_position,
         )
         return job_id
 
@@ -99,6 +109,9 @@ class JobRunner:
                 return
 
             target_output_folder = self._resolve_output_folder_for_index(payload, index)
+            rename_index = (
+                payload.filename_start_index + index if payload.filename_prefix else None
+            )
             file_error: Exception | None = None
             try:
                 output_path = None
@@ -111,6 +124,9 @@ class JobRunner:
                             payload.metadata,
                             payload.write_mode,
                             target_output_folder,
+                            payload.filename_prefix,
+                            rename_index,
+                            payload.filename_number_position,
                         )
                         break
                     except Exception as exc:
